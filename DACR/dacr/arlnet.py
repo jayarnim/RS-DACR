@@ -98,7 +98,7 @@ class Module(nn.Module):
         proj_item = self.proj_i(item_slice.float())
 
         # attn
-        scaled_item = self.attn_u(proj_item) * proj_item
+        scaled_item = self.attn_i(proj_item) * proj_item
 
         # representation learning
         rep_item = self.mlp_i(scaled_item)
