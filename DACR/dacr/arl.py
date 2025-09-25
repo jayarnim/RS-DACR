@@ -7,7 +7,6 @@ class Module(nn.Module):
         self,
         n_users: int,
         n_items: int,
-        n_factors: int,
         hidden: list,
         dropout: float,
         interactions: torch.Tensor, 
@@ -18,20 +17,15 @@ class Module(nn.Module):
         del self.init_args["self"]
         del self.init_args["__class__"]
 
-        # device setting
-        DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-        self.device = torch.device(DEVICE)
-
         # global attr
         self.n_users = n_users
         self.n_items = n_items
-        self.n_factors = n_factors
         self.hidden = hidden
         self.dropout = dropout
-        self.interactions = interactions.to(self.device)
-
-        # debugging args error
-        self._assert_arg_error()
+        self.register_buffer(
+            name="interactions", 
+            tensor=interactions,
+        )
 
         # generate layers
         self._init_layers()
@@ -62,23 +56,14 @@ class Module(nn.Module):
         return pred
 
     def score(self, user_idx, item_idx):
-        pred_vector = self.aml(user_idx, item_idx)
+        pred_vector = self.arl(user_idx, item_idx)
         logit = self.logit_layer(pred_vector).squeeze(-1)
         return logit
 
-    def aml(self, user_idx, item_idx):
-        proj_user = self.user(user_idx, item_idx)
-        proj_item = self.item(user_idx, item_idx)
-
-        concat = torch.cat(
-            tensors=(proj_user, proj_item), 
-            dim=-1
-        )
-
-        scaled_concat = self.attn(concat) * concat
-
-        pred_vector = self.mlp(scaled_concat)
-
+    def arl(self, user_idx, item_idx):
+        rep_user = self.user(user_idx, item_idx)
+        rep_item = self.item(user_idx, item_idx)
+        pred_vector = rep_user * rep_item
         return pred_vector
 
     def user(self, user_idx, item_idx):
@@ -92,7 +77,13 @@ class Module(nn.Module):
         # projection
         proj_user = self.proj_u(user_slice.float())
 
-        return proj_user
+        # attn
+        scaled_user = self.attn_u(proj_user) * proj_user
+        
+        # representation learning
+        rep_user = self.mlp_u(scaled_user)
+
+        return rep_user
 
     def item(self, user_idx, item_idx):
         # get item vector from interactions
@@ -101,28 +92,41 @@ class Module(nn.Module):
         # masking target users
         item_batch = torch.arange(item_idx.size(0))
         item_slice[item_batch, user_idx] = 0
-        
+
         # projection
         proj_item = self.proj_i(item_slice.float())
 
-        return proj_item
+        # attn
+        scaled_item = self.attn_i(proj_item) * proj_item
+
+        # representation learning
+        rep_item = self.mlp_i(scaled_item)
+
+        return rep_item
 
     def _init_layers(self):
         self.proj_u = nn.Linear(
             in_features=self.n_items,
-            out_features=self.n_factors,
+            out_features=self.hidden[0],
             bias=False,
         )
         self.proj_i = nn.Linear(
             in_features=self.n_users,
-            out_features=self.n_factors,
+            out_features=self.hidden[0],
             bias=False,
         )
-        self.attn = nn.Sequential(
+        self.attn_u = nn.Sequential(
             nn.Linear(self.hidden[0], self.hidden[0]),
             nn.Softmax(dim=1),
         )
-        self.mlp = nn.Sequential(
+        self.attn_i = nn.Sequential(
+            nn.Linear(self.hidden[0], self.hidden[0]),
+            nn.Softmax(dim=1),
+        )
+        self.mlp_u = nn.Sequential(
+            *list(self._generate_layers(self.hidden))
+        )
+        self.mlp_i = nn.Sequential(
             *list(self._generate_layers(self.hidden))
         )
         self.logit_layer = nn.Linear(
@@ -138,8 +142,3 @@ class Module(nn.Module):
             yield nn.ReLU()
             yield nn.Dropout(self.dropout)
             idx += 1
-
-    def _assert_arg_error(self):
-        CONDITION = (self.hidden[0] == self.n_factors * 2)
-        ERROR_MESSAGE = f"First MLP layer must match input size: {self.n_factors * 2}"
-        assert CONDITION, ERROR_MESSAGE

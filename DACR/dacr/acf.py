@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from . import amlnet, arlnet
+from . import arl, aml
 
 
 class Module(nn.Module):
@@ -20,10 +20,6 @@ class Module(nn.Module):
         del self.init_args["self"]
         del self.init_args["__class__"]
 
-        # device setting
-        DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-        self.device = torch.device(DEVICE)
-
         # global attr
         self.n_users = n_users
         self.n_items = n_items
@@ -31,7 +27,10 @@ class Module(nn.Module):
         self.hidden_arl = hidden_arl
         self.hidden_aml = hidden_aml
         self.dropout = dropout
-        self.interactions = interactions.to(self.device)
+        self.register_buffer(
+            name="interactions", 
+            tensor=interactions,
+        )
 
         # generate layers
         self._init_layers()
@@ -62,38 +61,41 @@ class Module(nn.Module):
         return pred
 
     def score(self, user_idx, item_idx):
-        pred_vector_arl = self.arl_net.arl(user_idx, item_idx)
-        pred_vector_aml = self.aml_net.aml(user_idx, item_idx)
+        pred_vector_arl = self.arl.arl(user_idx, item_idx)
+        pred_vector_aml = self.aml.aml(user_idx, item_idx)
 
-        pred_vector = torch.cat(
+        kwargs = dict(
             tensors=(pred_vector_arl, pred_vector_aml), 
-            dim=-1
+            dim=-1,
         )
+        pred_vector = torch.cat(**kwargs)
 
         logit = self.logit_layer(pred_vector).squeeze(-1)
 
         return logit
 
     def _init_layers(self):
-        self.arl_net = arlnet.Module(
+        kwargs = dict(
             n_users=self.n_users,
             n_items=self.n_items,
+            dropout=self.dropout,
+            interactions=self.interactions,
+        )
+        self.arl = arl.Module(
+            **kwargs, 
             hidden=self.hidden_arl,
-            dropout=self.dropout,
-            interactions=self.interactions,
         )
-        self.aml_net = amlnet.Module(
-            n_users=self.n_users,
-            n_items=self.n_items,
+        self.aml = aml.Module(
+            **kwargs, 
+            hidden=self.hidden_aml, 
             n_factors=self.n_factors,
-            hidden=self.hidden_aml,
-            dropout=self.dropout,
-            interactions=self.interactions,
         )
-        self.logit_layer = nn.Linear(
+
+        kwargs = dict(
             in_features=self.hidden_arl[-1] + self.hidden_aml[-1],
             out_features=1,
         )
+        self.logit_layer = nn.Linear(**kwargs)
 
     def _generate_layers(self, hidden):
         idx = 1
