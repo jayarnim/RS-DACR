@@ -13,6 +13,7 @@ class Module(nn.Module):
         interactions: torch.Tensor, 
     ):
         super(Module, self).__init__()
+
         # attr dictionary for load
         self.init_args = locals().copy()
         del self.init_args["self"]
@@ -33,7 +34,7 @@ class Module(nn.Module):
         self._assert_arg_error()
 
         # generate layers
-        self._init_layers()
+        self._set_up_components()
 
     def forward(
         self, 
@@ -65,71 +66,82 @@ class Module(nn.Module):
         logit = self.logit_layer(pred_vector).squeeze(-1)
         return logit
 
-    def aml(self, user_idx, item_idx):
-        proj_user = self.user(user_idx, item_idx)
-        proj_item = self.item(user_idx, item_idx)
+    def ncf(self, user_idx, item_idx):
+        # hist embedding
+        user_embed_slice = self.user_hist_embed_generator(user_idx, item_idx)
+        item_embed_slice = self.item_hist_embed_generator(user_idx, item_idx)
 
+        # attention
         concat = torch.cat(
-            tensors=(proj_user, proj_item), 
+            tensors=(user_embed_slice, item_embed_slice), 
             dim=-1
         )
+        concat_scaled = self.attn(concat) * concat
 
-        scaled_concat = self.attn(concat) * concat
-
-        pred_vector = self.mlp(scaled_concat)
+        # matching function
+        pred_vector = self.mlp_layers(concat_scaled)
 
         return pred_vector
 
-    def user(self, user_idx, item_idx):
+    def user_hist_embed_generator(self, user_idx, item_idx):
         # get user vector from interactions
-        user_slice = self.interactions[user_idx, :-1].clone()
+        user_interaction_slice = self.interactions[user_idx, :-1].clone()
         
         # masking target items
-        user_batch = torch.arange(user_idx.size(0))
-        user_slice[user_batch, item_idx] = 0
+        user_idx_batch = torch.arange(user_idx.size(0))
+        user_interaction_slice[user_idx_batch, item_idx] = 0
         
         # projection
-        proj_user = self.proj_u(user_slice.float())
+        user_proj_slice = self.proj_u(user_interaction_slice.float())
 
-        return proj_user
+        return user_proj_slice
 
-    def item(self, user_idx, item_idx):
+    def item_hist_embed_generator(self, user_idx, item_idx):
         # get item vector from interactions
-        item_slice = self.interactions.T[item_idx, :-1].clone()
+        item_interaction_slice = self.interactions.T[item_idx, :-1].clone()
         
         # masking target users
-        item_batch = torch.arange(item_idx.size(0))
-        item_slice[item_batch, user_idx] = 0
+        item_idx_batch = torch.arange(item_idx.size(0))
+        item_interaction_slice[item_idx_batch, user_idx] = 0
         
         # projection
-        proj_item = self.proj_i(item_slice.float())
+        item_proj_slice = self.proj_i(item_interaction_slice.float())
 
-        return proj_item
+        return item_proj_slice
 
-    def _init_layers(self):
-        self.proj_u = nn.Linear(
+    def _set_up_components(self):
+        self._create_layers()
+
+    def _create_layers(self):
+        kwargs = dict(
             in_features=self.n_items,
             out_features=self.n_factors,
             bias=False,
         )
-        self.proj_i = nn.Linear(
+        self.proj_u = nn.Linear(**kwargs)
+
+        kwargs = dict(
             in_features=self.n_users,
             out_features=self.n_factors,
             bias=False,
         )
+        self.proj_i = nn.Linear(**kwargs)
+
         self.attn = nn.Sequential(
             nn.Linear(self.hidden[0], self.hidden[0]),
             nn.Softmax(dim=1),
         )
-        self.mlp = nn.Sequential(
-            *list(self._generate_layers(self.hidden))
-        )
-        self.logit_layer = nn.Linear(
+
+        components = list(self._yield_layers(self.hidden))
+        self.mlp_layers = nn.Sequential(*components)
+
+        kwargs = dict(
             in_features=self.hidden[-1],
             out_features=1,
         )
+        self.logit_layer = nn.Linear(**kwargs)
 
-    def _generate_layers(self, hidden):
+    def _yield_layers(self, hidden):
         idx = 1
         while idx < len(hidden):
             yield nn.Linear(hidden[idx-1], hidden[idx])
