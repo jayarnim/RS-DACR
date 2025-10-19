@@ -169,7 +169,7 @@ class Module(nn.Module):
             nn.Softmax(dim=1),
         )
 
-        components = list(self._yield_layers(self.hidden))
+        components = list(self._yield_linear_block(self.hidden))
         self.matching_fn = nn.Sequential(*components)
 
         kwargs = dict(
@@ -178,13 +178,15 @@ class Module(nn.Module):
         )
         self.pred_layer = nn.Linear(**kwargs)
 
-    def _yield_layers(self, hidden):
+    def _yield_linear_block(self, hidden):
         idx = 1
         while idx < len(hidden):
-            yield nn.Linear(hidden[idx-1], hidden[idx])
-            yield nn.LayerNorm(hidden[idx])
-            yield nn.ReLU()
-            yield nn.Dropout(self.dropout)
+            yield nn.Sequential(
+                nn.Linear(hidden[idx-1], hidden[idx]),
+                nn.LayerNorm(hidden[idx]),
+                nn.ReLU(),
+                nn.Dropout(self.dropout),
+            )
             idx += 1
 
     def _assert_arg_error(self):
