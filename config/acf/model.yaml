@@ -1,0 +1,9 @@
+arl:
+    projection_dim: 64
+    hidden_dim: [64, 32, 16]
+    dropout: 0.2
+
+aml:
+    projection_dim: 16
+    hidden_dim: [64, 32, 16]
+    dropout: 0.2
